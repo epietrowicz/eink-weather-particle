@@ -62,6 +62,8 @@ Adafruit_SSD1680 epd(HOR_RES, VER_RES, EPD_DC, EPD_RESET, EPD_CS, SRAM_CS, EPD_B
 
 uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 
+PRODUCT_VERSION(1);
+
 struct ForecastEntry
 {
     String dt_txt; // Changed to String to handle dynamic allocation
@@ -101,6 +103,17 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, unsigned char *px_
 static uint32_t my_tick(void)
 {
     return millis();
+}
+
+void drawLowBatteryScreen()
+{
+    lv_obj_t *screen = lv_scr_act();
+    lv_obj_clean(screen);
+    lv_obj_t *label = lv_label_create(screen);
+    lv_label_set_text(label, "Low Battery");
+    lv_obj_center(label);
+    lv_refr_now(NULL);
+    didUpdateScreen = true;
 }
 
 void drawWeatherForecast()
@@ -277,8 +290,6 @@ void loop()
 {
     if (Particle.connected() && didSync)
     {
-        // https://docs.particle.io/reference/device-os/api/battery-voltage/battery-voltage-photon-2/
-
         if (didUpdateScreen)
         {
             Log.info("Going to sleep for 60 minutes...");
@@ -290,31 +301,43 @@ void loop()
         }
         if (!didPublish)
         {
-            Variant obj;
-            obj.set("lat", latitude);
-            obj.set("lon", longitude);
-            obj.set("cnt", NUM_FORECAST_ENTRIES);
-
-            event.name("weather");
-            event.data(obj);
-
-            Log.info("Publishing event...");
-
-            // We'll set the didUpdateScreen flag on the callback function to the webhook
-            Particle.publish(event);
-            waitForNot(event.isSending, 60000);
-
-            if (event.isSent())
+            // https://docs.particle.io/reference/device-os/api/battery-voltage/battery-voltage-photon-2/
+            // The constant is from the ADC range (0 - 4095) mapped to the voltage from 0 - 5 VDC (the maximum supported on VBAT_MEAS).
+            float voltage = analogRead(A6) / 819.2;
+            if (voltage < 3.2)
             {
-                Log.info("publish succeeded");
-                event.clear();
-                // Don't need to clear the flag because a hibernate will reset the device
-                didPublish = true;
+                Log.warn("Battery voltage low: %.2f V", voltage);
+                drawLowBatteryScreen(); // Set didUpdateScreen
             }
-            else if (!event.isOk())
+            else
             {
-                Log.info("publish failed error=%d", event.error());
-                event.clear();
+
+                Variant obj;
+                obj.set("lat", latitude);
+                obj.set("lon", longitude);
+                obj.set("cnt", NUM_FORECAST_ENTRIES);
+
+                event.name("weather");
+                event.data(obj);
+
+                Log.info("Publishing event...");
+
+                // We'll set the didUpdateScreen flag on the callback function to the webhook
+                Particle.publish(event);
+                waitForNot(event.isSending, 60000);
+
+                if (event.isSent())
+                {
+                    Log.info("publish succeeded");
+                    event.clear();
+                    // Don't need to clear the flag because a hibernate will reset the device
+                    didPublish = true;
+                }
+                else if (!event.isOk())
+                {
+                    Log.info("publish failed error=%d", event.error());
+                    event.clear();
+                }
             }
         }
     }
